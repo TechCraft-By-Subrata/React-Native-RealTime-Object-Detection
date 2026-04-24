@@ -409,25 +409,8 @@ function RealtimeDetectionScreen({
     }, 0);
 
     const isNormalized = maxCoord > 0 && maxCoord <= 1.5;
-    const looksLikeInputSpace = maxCoord > 1.5 && maxCoord <= REALTIME_INPUT_SIZE + 24;
-
-    const screenRatio = screenWidth / Math.max(screenHeight, 1);
-    const candidateA = { w: Math.max(frameWidth, 1), h: Math.max(frameHeight, 1) };
-    const candidateB = { w: Math.max(frameHeight, 1), h: Math.max(frameWidth, 1) };
-    const distA = Math.abs(candidateA.w / candidateA.h - screenRatio);
-    const distB = Math.abs(candidateB.w / candidateB.h - screenRatio);
-    const bestCandidate = distA <= distB ? candidateA : candidateB;
-
-    const srcWidth = isNormalized
-      ? 1
-      : looksLikeInputSpace
-        ? REALTIME_INPUT_SIZE
-        : bestCandidate.w;
-    const srcHeight = isNormalized
-      ? 1
-      : looksLikeInputSpace
-        ? REALTIME_INPUT_SIZE
-        : bestCandidate.h;
+    const srcWidth = Math.max(frameWidth, 1);
+    const srcHeight = Math.max(frameHeight, 1);
 
     // Camera preview uses aspect-fill. Project detection coordinates through
     // the same cover transform to keep boxes aligned on-screen.
@@ -445,10 +428,15 @@ function RealtimeDetectionScreen({
       const y1 = Math.min(item.y1, item.y2);
       const y2 = Math.max(item.y1, item.y2);
 
-      const left = clamp(x1 * coverScale + offsetX, 0, screenWidth - 1);
-      const right = clamp(x2 * coverScale + offsetX, 0, screenWidth - 1);
-      const top = clamp(y1 * coverScale + offsetY, 0, screenHeight - 1);
-      const bottom = clamp(y2 * coverScale + offsetY, 0, screenHeight - 1);
+      const srcX1 = isNormalized ? x1 * srcWidth : x1;
+      const srcX2 = isNormalized ? x2 * srcWidth : x2;
+      const srcY1 = isNormalized ? y1 * srcHeight : y1;
+      const srcY2 = isNormalized ? y2 * srcHeight : y2;
+
+      const left = clamp(srcX1 * coverScale + offsetX, 0, screenWidth - 1);
+      const right = clamp(srcX2 * coverScale + offsetX, 0, screenWidth - 1);
+      const top = clamp(srcY1 * coverScale + offsetY, 0, screenHeight - 1);
+      const bottom = clamp(srcY2 * coverScale + offsetY, 0, screenHeight - 1);
       const width = Math.max(2, right - left);
       const height = Math.max(2, bottom - top);
 
