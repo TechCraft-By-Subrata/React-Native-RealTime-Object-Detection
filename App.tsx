@@ -56,8 +56,47 @@ type OverlayDetection = {
   height: number;
   label: string;
   score: number;
+  color: string;
 };
-const REALTIME_INPUT_SIZE = 640;
+const REALTIME_DETECTION_THRESHOLD = 0.3;
+const REALTIME_SMALL_OBJECT_THRESHOLD = 0.2;
+const REALTIME_FURNITURE_THRESHOLD = 0.22;
+const SMALL_OBJECT_CLASSES = [
+  'CELL_PHONE',
+  'REMOTE',
+  'BOOK',
+  'CUP',
+  'BOTTLE',
+  'KEYBOARD',
+  'MOUSE',
+  'LAPTOP',
+  'DINING_TABLE',
+] as const;
+const FURNITURE_CLASSES = [
+  'CHAIR',
+  'COUCH',
+  'DINING_TABLE',
+  'BENCH',
+] as const;
+const DETECTION_COLORS = [
+  '#4dc3ff',
+  '#ff7a59',
+  '#7fd35a',
+  '#f9c74f',
+  '#c77dff',
+  '#f94144',
+  '#43aa8b',
+  '#577590',
+] as const;
+
+function withAlpha(hex: string, alpha: number): string {
+  const sanitized = hex.replace('#', '');
+  if (sanitized.length !== 6) return `rgba(77,195,255,${alpha})`;
+  const r = Number.parseInt(sanitized.slice(0, 2), 16);
+  const g = Number.parseInt(sanitized.slice(2, 4), 16);
+  const b = Number.parseInt(sanitized.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 const MODEL_WARMUP_IMAGE = 'https://images.pexels.com/photos/1108099/pexels-photo-1108099.jpeg';
 
@@ -439,6 +478,7 @@ function RealtimeDetectionScreen({
       const bottom = clamp(srcY2 * coverScale + offsetY, 0, screenHeight - 1);
       const width = Math.max(2, right - left);
       const height = Math.max(2, bottom - top);
+      const color = DETECTION_COLORS[index % DETECTION_COLORS.length];
 
       return {
         id: `${item.label}-${index}-${Math.round(item.score * 1000)}`,
@@ -448,6 +488,7 @@ function RealtimeDetectionScreen({
         height,
         label: item.label,
         score: item.score,
+        color,
       } satisfies OverlayDetection;
     });
 
@@ -501,13 +542,72 @@ function RealtimeDetectionScreen({
           return;
         }
         const detections = detRof(frame, false, {
-          detectionThreshold: 0.5,
+          detectionThreshold: REALTIME_DETECTION_THRESHOLD,
+          iouThreshold: 0.45,
+          inputSize: 640,
         });
-        if (!detections || detections.length === 0) {
+        const nearObjectDetections = detRof(frame, false, {
+          detectionThreshold: REALTIME_SMALL_OBJECT_THRESHOLD,
+          iouThreshold: 0.45,
+          inputSize: 640,
+          classesOfInterest: SMALL_OBJECT_CLASSES as unknown as string[],
+        });
+        const furnitureDetections = detRof(frame, false, {
+          detectionThreshold: REALTIME_FURNITURE_THRESHOLD,
+          iouThreshold: 0.45,
+          inputSize: 640,
+          classesOfInterest: FURNITURE_CLASSES as unknown as string[],
+        });
+        const merged = [...(detections ?? [])];
+        const auxiliaryDetections = [
+          ...(nearObjectDetections ?? []),
+          ...(furnitureDetections ?? []),
+        ];
+        if (auxiliaryDetections.length > 0) {
+          for (let i = 0; i < auxiliaryDetections.length; i += 1) {
+            const extra = auxiliaryDetections[i];
+            let exists = false;
+            for (let j = 0; j < merged.length; j += 1) {
+              const base = merged[j];
+              if (String(base.label) !== String(extra.label)) continue;
+
+              const ax1 = Math.min(base.bbox.x1, base.bbox.x2);
+              const ay1 = Math.min(base.bbox.y1, base.bbox.y2);
+              const ax2 = Math.max(base.bbox.x1, base.bbox.x2);
+              const ay2 = Math.max(base.bbox.y1, base.bbox.y2);
+
+              const bx1 = Math.min(extra.bbox.x1, extra.bbox.x2);
+              const by1 = Math.min(extra.bbox.y1, extra.bbox.y2);
+              const bx2 = Math.max(extra.bbox.x1, extra.bbox.x2);
+              const by2 = Math.max(extra.bbox.y1, extra.bbox.y2);
+
+              const ix1 = Math.max(ax1, bx1);
+              const iy1 = Math.max(ay1, by1);
+              const ix2 = Math.min(ax2, bx2);
+              const iy2 = Math.min(ay2, by2);
+              const iw = Math.max(0, ix2 - ix1);
+              const ih = Math.max(0, iy2 - iy1);
+              const inter = iw * ih;
+              const areaA = Math.max(1, (ax2 - ax1) * (ay2 - ay1));
+              const areaB = Math.max(1, (bx2 - bx1) * (by2 - by1));
+              const iou = inter / Math.max(1, areaA + areaB - inter);
+
+              if (iou > 0.75) {
+                exists = true;
+                if (extra.score > base.score) {
+                  merged[j] = extra;
+                }
+                break;
+              }
+            }
+            if (!exists) merged.push(extra);
+          }
+        }
+        if (!merged.length) {
           scheduleOnRN(handleNoDetection);
           return;
         }
-        const serializableDetections = detections.slice(0, 12).map((det) => ({
+        const serializableDetections = merged.slice(0, 16).map((det) => ({
           x1: det.bbox.x1,
           y1: det.bbox.y1,
           x2: det.bbox.x2,
@@ -578,10 +678,22 @@ function RealtimeDetectionScreen({
             key={det.id}
             style={[
               styles.detectionBox,
-              { left: det.left, top: det.top, width: det.width, height: det.height },
+              {
+                left: det.left,
+                top: det.top,
+                width: det.width,
+                height: det.height,
+                borderColor: det.color,
+                backgroundColor: withAlpha(det.color, 0.12),
+              },
             ]}
           >
-            <View style={styles.detectionTag}>
+            <View
+              style={[
+                styles.detectionTag,
+                { borderColor: det.color, backgroundColor: withAlpha(det.color, 0.25) },
+              ]}
+            >
               <Text style={styles.detectionTagText}>
                 {det.label.replace(/_/g, ' ').toLowerCase()} {(det.score * 100).toFixed(0)}%
               </Text>
