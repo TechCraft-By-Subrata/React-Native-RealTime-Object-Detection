@@ -1,97 +1,161 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+![Real-Time Detection Banner](./featured_image.png)
 
-# Getting Started
+# Real-Time Detection
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+A React Native app for on-device visual intelligence using **VisionCamera** + **ExecuTorch**.
 
-## Step 1: Start Metro
+This project includes:
+- Single-frame classification with `EfficientNet V2 S`
+- Real-time object detection overlays with `YOLO26N`
+- On-device inference (no cloud inference required)
+- Basic model management UI for download/readiness status
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## Demo Flows
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+1. **Model Management**
+- Check model readiness
+- Download and warm up YOLO26N
+- Inspect downloaded model files
 
-```sh
-# Using npm
-npm start
+2. **Scan Item**
+- Capture a still frame
+- Run image classification
+- Show top label and confidence
 
-# OR using Yarn
-yarn start
+3. **Realtime Detection**
+- Process camera frames continuously
+- Detect multiple objects with threshold tuning
+- Render bounding boxes and labels on live preview
+
+## Tech Stack
+
+- React Native `0.81.5`
+- React `19.1.0`
+- TypeScript
+- `react-native-vision-camera`
+- `react-native-executorch`
+- `react-native-worklets`
+- `react-native-safe-area-context`
+
+## Project Structure
+
+```text
+realtimedetection/
+├── App.tsx
+├── src/
+│   ├── components/          # Shared UI fallbacks
+│   ├── constants/           # Detection and model constants
+│   ├── hooks/               # Reusable hooks (e.g. downloaded models)
+│   ├── screens/             # Screen-level UI and orchestration
+│   ├── styles/              # Shared StyleSheet definitions
+│   ├── types/               # Domain types
+│   └── utils/               # Pure utility functions
+├── android/
+├── ios/
+└── __tests__/
 ```
 
-## Step 2: Build and run your app
+## Architecture Notes
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+- `App.tsx` handles only app-level orchestration and screen switching.
+- Screen modules are separated by responsibility:
+  - `HomeScreen`
+  - `ModelManagementScreen`
+  - `ScannerScreen`
+  - `RealtimeDetectionScreen`
+- Shared logic is extracted into hooks and utilities to keep screens focused and DRY.
+- Detection post-processing is isolated in utilities for easier testing and evolution.
 
-### Android
+## Prerequisites
+
+Before running the app, ensure your environment is set up for React Native development:
+- Node.js `>= 20`
+- Android Studio and/or Xcode
+- CocoaPods (for iOS)
+- React Native environment dependencies: [official setup guide](https://reactnative.dev/docs/set-up-your-environment)
+
+## Installation
 
 ```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
+npm install
 ```
 
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+### iOS only
 
 ```sh
 bundle install
+bundle exec pod install --project-directory=ios
 ```
 
-Then, and every time you update your native dependencies, run:
+## Running the App
+
+Start Metro:
 
 ```sh
-bundle exec pod install
+npm start
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+In a second terminal:
 
 ```sh
-# Using npm
+npm run android
+# or
 npm run ios
-
-# OR using Yarn
-yarn ios
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+## Available Scripts
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+- `npm start` - start Metro bundler
+- `npm run android` - build/run on Android
+- `npm run ios` - build/run on iOS
+- `npm run lint` - run ESLint
+- `npm test` - run Jest tests
 
-## Step 3: Modify your app
+## Model Behavior
 
-Now that you have successfully run the app, let's make changes!
+- Classification uses `EFFICIENTNET_V2_S`.
+- Realtime detection uses `YOLO26N`.
+- Realtime screen performs multi-pass detection thresholds to improve recall of smaller/near objects.
+- On iOS, model readiness uses downloaded-model checks plus warmup flow.
+- On Android, YOLO readiness is currently treated as available by platform branch logic.
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+## Troubleshooting
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+### Camera permission blocked
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+If camera access is denied:
+- Open system settings for the app
+- Re-enable camera permission
+- Restart app if needed
 
-## Congratulations! :tada:
+### Jest fails with Watchman permission errors
 
-You've successfully run and modified your React Native App. :partying_face:
+If you see Watchman-related failures in restricted environments, run:
 
-### Now what?
+```sh
+npm test -- --watch=false --watchman=false
+```
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+### Jest fails on `react-native-executorch` ESM imports
 
-# Troubleshooting
+Current Jest config may require additional transform/mocking setup for some `node_modules` packages (including `react-native-executorch`). If tests fail with `Cannot use import statement outside a module`, update Jest `transformIgnorePatterns` or provide module mocks.
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+## Development Guidelines
 
-# Learn More
+- Keep business logic in hooks/utils, not screen components.
+- Prefer pure utility functions for detection math and mapping.
+- Maintain SRP boundaries:
+  - UI in screens/components
+  - stateful side effects in hooks
+  - data transforms in utilities
 
-To learn more about React Native, take a look at the following resources:
+## Contributing
 
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+1. Create a feature branch
+2. Make focused changes with clear responsibility boundaries
+3. Run type-check/lint/tests locally
+4. Open a PR with a concise change summary
+
+## License
+
+Internal project / not yet licensed for public distribution.
