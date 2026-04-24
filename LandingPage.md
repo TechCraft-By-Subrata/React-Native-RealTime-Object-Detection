@@ -15,7 +15,9 @@ In this micro-course, we strip away the academic jargon and get straight to buil
 * Portfolio Gold: Build a high-impact AI project that stands out in the crowded React Native job market.
 
 ------------------------------
-## 📚 Course Curriculum## Phase 1: The "Why" & The "How"
+## 📚 Course Curriculum
+
+## Phase 1: The "Why" & The "How"
 
 * Ch 1: The ExecuTorch Revolution
 * Why on-device AI is the future (Privacy + Cost + Speed).
