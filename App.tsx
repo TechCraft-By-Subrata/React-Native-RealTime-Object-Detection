@@ -20,11 +20,13 @@ import {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Camera,
+  getCameraFormat,
+  Templates,
+  useCameraDevices,
   useCameraDevice,
   useCameraPermission,
   usePhotoOutput,
   useFrameOutput,
-  type Constraint,
 } from 'react-native-vision-camera';
 import {
   useClassification,
@@ -34,7 +36,7 @@ import {
   ObjectDetectionModule,
 } from 'react-native-executorch';
 import { BareResourceFetcher } from 'react-native-executorch-bare-resource-fetcher';
-import { runOnJS } from 'react-native-worklets';
+import { scheduleOnRN } from 'react-native-worklets';
 
 type ScreenName = 'home' | 'model' | 'scan' | 'realtime';
 type DownloadedModelType = 'classification' | 'detection' | 'other';
@@ -348,20 +350,17 @@ function RealtimeDetectionScreen({
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const { hasPermission, requestPermission, status, canRequestPermission } = useCameraPermission();
-  const device = useCameraDevice('back');
+  const devices = useCameraDevices();
+  const device = devices.find((d) => d.position === 'back') ?? devices[0];
+  const format = useMemo(() => {
+    if (device == null) return undefined;
+    try {
+      return getCameraFormat(device, { ...Templates.FrameProcessing });
+    } catch {
+      return undefined;
+    }
+  }, [device]);
   const detector = useObjectDetection({ model: YOLO26N });
-  const [sessionNativePixelFormat, setSessionNativePixelFormat] = useState<string>('unknown');
-  const supportedPixelFormats = useMemo(
-    () => (device ? device.supportedPixelFormats.join(', ') : 'n/a'),
-    [device]
-  );
-  const cameraConstraints = useMemo(
-    () =>
-      Platform.OS === 'android'
-        ? ([{ pixelFormat: 'private' }, { binned: true }] as Constraint[])
-        : undefined,
-    []
-  );
   const [label, setLabel] = useState('Waiting for detections...');
   const [overlayDetections, setOverlayDetections] = useState<OverlayDetection[]>([]);
   const lastTextRef = useRef<string>('');
@@ -374,7 +373,24 @@ function RealtimeDetectionScreen({
     }
   }, [hasPermission, canRequestPermission, requestPermission]);
 
+  useEffect(() => {
+    if (!detector.error) return;
+    console.error('[Realtime][DetectorError]', {
+      error: String(detector.error),
+      platform: Platform.OS,
+      isReady: detector.isReady,
+      downloadProgress: detector.downloadProgress,
+    });
+    setLabel(`Realtime detection unavailable: ${String(detector.error)}`);
+    setOverlayDetections([]);
+  }, [detector.downloadProgress, detector.error, detector.isReady]);
+
   const handleDetections = useCallback((raw: RawDetection[], frameWidth: number, frameHeight: number) => {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      handleNoDetection();
+      return;
+    }
+
     const now = Date.now();
     if (now - lastUpdateTsRef.current < 120) return;
 
@@ -469,40 +485,38 @@ function RealtimeDetectionScreen({
     setOverlayDetections([]);
   }, []);
 
-  const handleDetectionError = useCallback((message: string) => {
+  const handleFrameProcessingError = useCallback((message: string) => {
     const now = Date.now();
-    if (now - lastUpdateTsRef.current < 1000) return;
-    lastUpdateTsRef.current = now;
-    lastTextRef.current = 'Realtime detection unavailable';
-    if (
-      Platform.OS === 'android' &&
-      /getnativebuffer|nativebuffer|hardwarebuffer|api 28/i.test(message)
-    ) {
-      setLabel('Realtime detection unavailable: Android camera frame has no HardwareBuffer.');
-    } else {
-      setLabel(`Realtime detection unavailable: ${message}`);
-    }
-    setOverlayDetections([]);
+    if (now - lastErrorLogTsRef.current < 1500) return;
+    lastErrorLogTsRef.current = now;
+    console.error('[Realtime][FrameError]', {
+      message,
+      platform: Platform.OS,
+      detectorReady: detectorIsReady,
+      detectorHasRunOnFrame: !!detRof,
+    });
   }, []);
 
+  // Extract runOnFrame before the worklet — capturing the full detector object
+  // across the JS/worklet boundary causes "Failed to create a worklet".
+  const detRof = detector.runOnFrame;
+  const detectorIsReady = detector.isReady;
+
   const frameOutput = useFrameOutput({
-    // Android needs HardwareBuffer-backed frames for ExecuTorch runOnFrame.
-    // iOS continues to use RGB as before.
-    pixelFormat: Platform.OS === 'android' ? 'native' : 'rgb',
+    pixelFormat: 'rgb',
     dropFramesWhileBusy: true,
-    enablePreviewSizedOutputBuffers: Platform.OS === 'android' ? false : true,
-    allowDeferredStart: true,
-    onFrame(frame) {
+    enablePreviewSizedOutputBuffers: true,
+    onFrame: useCallback((frame) => {
       'worklet';
       try {
-        if (!detector.runOnFrame) return;
-        const detections = detector.runOnFrame(frame, false, {
-          inputSize: REALTIME_INPUT_SIZE,
-          detectionThreshold: 0.4,
-          iouThreshold: 0.5,
+        if (!detectorIsReady || !detRof) {
+          return;
+        }
+        const detections = detRof(frame, false, {
+          detectionThreshold: 0.5,
         });
-        if (!detections.length) {
-          runOnJS(handleNoDetection)();
+        if (!detections || detections.length === 0) {
+          scheduleOnRN(handleNoDetection);
           return;
         }
         const serializableDetections = detections.slice(0, 12).map((det) => ({
@@ -514,21 +528,19 @@ function RealtimeDetectionScreen({
           score: det.score,
         }));
         // Camera sensor frames are landscape-native, swap dimensions for portrait UI mapping.
-        runOnJS(handleDetections)(serializableDetections, frame.height, frame.width);
+        scheduleOnRN(handleDetections, serializableDetections, frame.height, frame.width);
       } catch (error) {
-        // Keep frame loop alive even if one frame fails, and avoid log spam.
-        const now = Date.now();
-        if (now - lastErrorLogTsRef.current > 1500) {
-          lastErrorLogTsRef.current = now;
-          const msg = typeof error === 'string'
-            ? error
-            : (error as { message?: string })?.message ?? 'frame processing error';
-          runOnJS(handleDetectionError)(msg);
-        }
+        const msg = typeof error === 'string'
+          ? error
+          : (error as { message?: string })?.message ?? 'frame processing error';
+        // Per-frame worklet errors can be transient while camera/session settles.
+        // Keep UI in "no detection" state unless detector.error reports a real failure.
+        scheduleOnRN(handleNoDetection);
+        scheduleOnRN(handleFrameProcessingError, msg);
       } finally {
         frame.dispose();
       }
-    },
+    }, [detectorIsReady, detRof, handleNoDetection, handleDetections, handleFrameProcessingError]),
   });
 
   if (!hasPermission) {
@@ -569,17 +581,7 @@ function RealtimeDetectionScreen({
         device={device}
         isActive={true}
         outputs={[frameOutput]}
-        constraints={cameraConstraints}
-        onSessionConfigSelected={(config) => {
-          if (Platform.OS === 'android') {
-            setSessionNativePixelFormat(config.nativePixelFormat);
-            console.log('[Realtime][Session]', {
-              nativePixelFormat: config.nativePixelFormat,
-              selectedFPS: config.selectedFPS,
-              isBinned: config.isBinned,
-            });
-          }
-        }}
+        format={format}
         orientationSource="device"
       />
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
@@ -616,11 +618,6 @@ function RealtimeDetectionScreen({
           </>
         ) : (
           <Text style={styles.loadingHint}>Realtime detection is running.</Text>
-        )}
-        {Platform.OS === 'android' && (
-          <Text style={styles.loadingHint}>
-            nativePixelFormat={sessionNativePixelFormat} | supported=[{supportedPixelFormats}]
-          </Text>
         )}
       </View>
 
@@ -661,13 +658,14 @@ function ScannerScreen({
       setLabel('Classifying…');
 
       // Capture a still frame
-      const photo = await photoOutput.capturePhotoToFile({ flashMode: 'off' }, {});
+      const photo = await photoOutput.capturePhoto({ flashMode: 'off' }, {});
+      const filePath = await photo.saveToTemporaryFileAsync(85);
 
       // ExecuTorch image readers can differ by platform/build, so try both
       // native path and file:// URI forms before failing.
-      const candidateSources = photo.filePath.startsWith('file://')
-        ? [photo.filePath, photo.filePath.replace(/^file:\/\//, '')]
-        : [photo.filePath, `file://${photo.filePath}`];
+      const candidateSources = filePath.startsWith('file://')
+        ? [filePath, filePath.replace(/^file:\/\//, '')]
+        : [filePath, `file://${filePath}`];
 
       let results: Record<string, number> | null = null;
       let lastError: unknown = null;
