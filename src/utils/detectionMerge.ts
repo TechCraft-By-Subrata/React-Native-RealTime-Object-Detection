@@ -12,6 +12,8 @@ type ModelDetection = {
 };
 
 function getIou(a: ModelDetection, b: ModelDetection): number {
+  'worklet';
+
   const ax1 = Math.min(a.bbox.x1, a.bbox.x2);
   const ay1 = Math.min(a.bbox.y1, a.bbox.y2);
   const ax2 = Math.max(a.bbox.x1, a.bbox.x2);
@@ -42,6 +44,8 @@ export function mergeDetectionSets(
   auxiliaryDetections: ModelDetection[],
   iouThreshold = 0.75,
 ): ModelDetection[] {
+  'worklet';
+
   const merged = [...baseDetections];
 
   for (let i = 0; i < auxiliaryDetections.length; i += 1) {
@@ -70,6 +74,8 @@ export function mergeDetectionSets(
 }
 
 export function serializeDetections(detections: ModelDetection[], limit = 16): RawDetection[] {
+  'worklet';
+
   return detections.slice(0, limit).map((det) => ({
     x1: det.bbox.x1,
     y1: det.bbox.y1,
